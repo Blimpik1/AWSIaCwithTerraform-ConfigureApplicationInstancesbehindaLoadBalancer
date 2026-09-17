@@ -1,5 +1,6 @@
-
-# Отримання існуючих ресурсів через Data Sources
+# -------------------------------------------------------------
+# 1. Отримання існуючих ресурсів через Data Sources
+# -------------------------------------------------------------
 
 data "aws_vpc" "this" {
   filter {
@@ -16,16 +17,6 @@ data "aws_subnet" "public_a" {
 data "aws_subnet" "public_b" {
   vpc_id     = data.aws_vpc.this.id
   cidr_block = var.public_subnet_b_cidr
-}
-
-data "aws_subnet" "private_a" {
-  vpc_id     = data.aws_vpc.this.id
-  cidr_block = var.private_subnet_a_cidr
-}
-
-data "aws_subnet" "private_b" {
-  vpc_id     = data.aws_vpc.this.id
-  cidr_block = var.private_subnet_b_cidr
 }
 
 data "aws_security_group" "ec2_ssh" {
@@ -53,7 +44,9 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# Launch Template
+# -------------------------------------------------------------
+# 2. Launch Template
+# -------------------------------------------------------------
 
 resource "aws_launch_template" "this" {
   name          = var.launch_template_name
@@ -66,7 +59,7 @@ resource "aws_launch_template" "this" {
   }
 
   network_interfaces {
-    associate_public_ip_address = false
+    associate_public_ip_address = true
     delete_on_termination       = true
     security_groups = [
       data.aws_security_group.ec2_ssh.id,
@@ -83,6 +76,10 @@ resource "aws_launch_template" "this" {
               #!/bin/bash
               dnf update -y
               dnf install -y httpd jq
+              
+              # Забороняємо KeepAlive, щоб балансувальник розподіляв кожен HTTP-запит
+              echo "KeepAlive Off" >> /etc/httpd/conf/httpd.conf
+              
               systemctl enable --now httpd
 
               TOKEN=$(curl -s -S -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
@@ -116,7 +113,9 @@ resource "aws_launch_template" "this" {
   }
 }
 
-# Application Load Balancer, Target Group & Listener
+# -------------------------------------------------------------
+# 3. Application Load Balancer, Target Group & Listener
+# -------------------------------------------------------------
 
 resource "aws_lb" "this" {
   name               = var.alb_name
@@ -137,7 +136,7 @@ resource "aws_lb_target_group" "this" {
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.this.id
 
-  deregistration_delay = 10
+  deregistration_delay = 5
 
   stickiness {
     type    = "lb_cookie"
@@ -149,8 +148,8 @@ resource "aws_lb_target_group" "this" {
     protocol            = "HTTP"
     port                = "80"
     matcher             = "200"
-    interval            = 10
-    timeout             = 5
+    interval            = 5
+    timeout             = 2
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
@@ -169,17 +168,19 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# Auto Scaling Group
+# -------------------------------------------------------------
+# 4. Auto Scaling Group
+# -------------------------------------------------------------
 
 resource "aws_autoscaling_group" "this" {
-  name              = var.asg_name
-  desired_capacity  = 2
-  min_size          = 1
-  max_size          = 2
-  health_check_type = "ELB"
+  name                = var.asg_name
+  desired_capacity    = 2
+  min_size            = 1
+  max_size            = 2
+  target_group_arns   = [aws_lb_target_group.this.arn]
   vpc_zone_identifier = [
-    data.aws_subnet.private_a.id,
-    data.aws_subnet.private_b.id
+    data.aws_subnet.public_a.id,
+    data.aws_subnet.public_b.id
   ]
 
   launch_template {
@@ -204,8 +205,9 @@ resource "aws_autoscaling_group" "this" {
   }
 }
 
-
-# Прив'язка ASG до Target Group балансувальника
+# -------------------------------------------------------------
+# 5. Прив'язка ASG до Target Group балансувальника
+# -------------------------------------------------------------
 
 resource "aws_autoscaling_attachment" "asg_attachment" {
   autoscaling_group_name = aws_autoscaling_group.this.id
