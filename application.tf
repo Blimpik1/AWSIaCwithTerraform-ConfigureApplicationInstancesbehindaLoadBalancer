@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# 1. Отримання існуючих ресурсів через Data Sources
+# 1. Data Sources
 # -------------------------------------------------------------
 
 data "aws_vpc" "this" {
@@ -17,6 +17,16 @@ data "aws_subnet" "public_a" {
 data "aws_subnet" "public_b" {
   vpc_id     = data.aws_vpc.this.id
   cidr_block = var.public_subnet_b_cidr
+}
+
+data "aws_subnet" "private_a" {
+  vpc_id     = data.aws_vpc.this.id
+  cidr_block = var.private_subnet_a_cidr
+}
+
+data "aws_subnet" "private_b" {
+  vpc_id     = data.aws_vpc.this.id
+  cidr_block = var.private_subnet_b_cidr
 }
 
 data "aws_security_group" "ec2_ssh" {
@@ -59,8 +69,7 @@ resource "aws_launch_template" "this" {
   }
 
   network_interfaces {
-    associate_public_ip_address = true
-    delete_on_termination       = true
+    delete_on_termination = true
     security_groups = [
       data.aws_security_group.ec2_ssh.id,
       data.aws_security_group.ec2_http.id
@@ -74,29 +83,14 @@ resource "aws_launch_template" "this" {
 
   user_data = base64encode(<<-EOF
               #!/bin/bash
-              dnf update -y
-              dnf install -y httpd jq
-              
-              # Забороняємо KeepAlive, щоб балансувальник розподіляв кожен HTTP-запит
-              echo "KeepAlive Off" >> /etc/httpd/conf/httpd.conf
-              
+              dnf install -y httpd jq || true
               systemctl enable --now httpd
 
               TOKEN=$(curl -s -S -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
               INSTANCE_ID=$(curl -s -S -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
               PRIVATE_IP=$(curl -s -S -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
 
-              cat <<HTML > /var/www/html/index.html
-              <!DOCTYPE html>
-              <html>
-              <head><title>App Server</title></head>
-              <body>
-                <h1>Application Instance Details</h1>
-                <p><strong>Instance ID:</strong> $INSTANCE_ID</p>
-                <p><strong>Private IP:</strong> $PRIVATE_IP</p>
-              </body>
-              </html>
-              HTML
+              echo "Instance ID: $INSTANCE_ID | Private IP: $PRIVATE_IP" > /var/www/html/index.html
               EOF
   )
 
@@ -114,7 +108,7 @@ resource "aws_launch_template" "this" {
 }
 
 # -------------------------------------------------------------
-# 3. Application Load Balancer, Target Group & Listener
+# 3. Application Load Balancer & Target Group
 # -------------------------------------------------------------
 
 resource "aws_lb" "this" {
@@ -136,20 +130,13 @@ resource "aws_lb_target_group" "this" {
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.this.id
 
-  deregistration_delay = 5
-
-  stickiness {
-    type    = "lb_cookie"
-    enabled = false
-  }
-
   health_check {
     path                = "/"
     protocol            = "HTTP"
     port                = "80"
     matcher             = "200"
-    interval            = 5
-    timeout             = 2
+    interval            = 15
+    timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
@@ -173,14 +160,13 @@ resource "aws_lb_listener" "http" {
 # -------------------------------------------------------------
 
 resource "aws_autoscaling_group" "this" {
-  name              = var.asg_name
-  desired_capacity  = 2
-  min_size          = 1
-  max_size          = 2
-  target_group_arns = [aws_lb_target_group.this.arn]
+  name             = var.asg_name
+  desired_capacity = 2
+  min_size         = 1
+  max_size         = 2
   vpc_zone_identifier = [
-    data.aws_subnet.public_a.id,
-    data.aws_subnet.public_b.id
+    data.aws_subnet.private_a.id,
+    data.aws_subnet.private_b.id
   ]
 
   launch_template {
@@ -206,7 +192,7 @@ resource "aws_autoscaling_group" "this" {
 }
 
 # -------------------------------------------------------------
-# 5. Прив'язка ASG до Target Group балансувальника
+# 5. Attachment
 # -------------------------------------------------------------
 
 resource "aws_autoscaling_attachment" "asg_attachment" {
