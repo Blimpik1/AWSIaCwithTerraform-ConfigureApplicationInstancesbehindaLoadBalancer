@@ -173,11 +173,11 @@ resource "aws_lb_listener" "http" {
 # -------------------------------------------------------------
 
 resource "aws_autoscaling_group" "this" {
-  name                = var.asg_name
-  desired_capacity    = 2
-  min_size            = 1
-  max_size            = 2
-  target_group_arns   = [aws_lb_target_group.this.arn]
+  name              = var.asg_name
+  desired_capacity  = 2
+  min_size          = 1
+  max_size          = 2
+  target_group_arns = [aws_lb_target_group.this.arn]
   vpc_zone_identifier = [
     data.aws_subnet.public_a.id,
     data.aws_subnet.public_b.id
