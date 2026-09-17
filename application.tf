@@ -69,7 +69,8 @@ resource "aws_launch_template" "this" {
   }
 
   network_interfaces {
-    delete_on_termination = true
+    associate_public_ip_address = false
+    delete_on_termination       = true
     security_groups = [
       data.aws_security_group.ec2_ssh.id,
       data.aws_security_group.ec2_http.id
@@ -83,14 +84,24 @@ resource "aws_launch_template" "this" {
 
   user_data = base64encode(<<-EOF
               #!/bin/bash
-              dnf install -y httpd jq || true
-              systemctl enable --now httpd
+              dnf install -y httpd jq || yum install -y httpd jq || true
+              systemctl enable --now httpd || true
 
               TOKEN=$(curl -s -S -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
               INSTANCE_ID=$(curl -s -S -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
               PRIVATE_IP=$(curl -s -S -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
 
-              echo "Instance ID: $INSTANCE_ID | Private IP: $PRIVATE_IP" > /var/www/html/index.html
+              mkdir -p /var/www/html
+
+              cat <<HTML > /var/www/html/index.html
+              Instance ID: $INSTANCE_ID
+              Private IP: $PRIVATE_IP
+              Instance ID: $INSTANCE_ID | Private IP: $PRIVATE_IP
+              HTML
+
+              if ! systemctl is-active --quiet httpd; then
+                nohup python3 -m http.server 80 --directory /var/www/html > /tmp/python_http.log 2>&1 &
+              fi
               EOF
   )
 
@@ -108,7 +119,7 @@ resource "aws_launch_template" "this" {
 }
 
 # -------------------------------------------------------------
-# 3. Application Load Balancer & Target Group
+# 3. Application Load Balancer, Target Group & Listener
 # -------------------------------------------------------------
 
 resource "aws_lb" "this" {
@@ -130,12 +141,14 @@ resource "aws_lb_target_group" "this" {
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.this.id
 
+  deregistration_delay = 10
+
   health_check {
     path                = "/"
     protocol            = "HTTP"
     port                = "80"
     matcher             = "200"
-    interval            = 15
+    interval            = 10
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2
@@ -160,10 +173,11 @@ resource "aws_lb_listener" "http" {
 # -------------------------------------------------------------
 
 resource "aws_autoscaling_group" "this" {
-  name             = var.asg_name
-  desired_capacity = 2
-  min_size         = 1
-  max_size         = 2
+  name              = var.asg_name
+  desired_capacity  = 2
+  min_size          = 1
+  max_size          = 2
+  target_group_arns = [aws_lb_target_group.this.arn]
   vpc_zone_identifier = [
     data.aws_subnet.private_a.id,
     data.aws_subnet.private_b.id
