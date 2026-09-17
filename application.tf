@@ -137,12 +137,19 @@ resource "aws_lb_target_group" "this" {
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.this.id
 
+  deregistration_delay = 10
+
+  stickiness {
+    type    = "lb_cookie"
+    enabled = false
+  }
+
   health_check {
     path                = "/"
     protocol            = "HTTP"
     port                = "80"
     matcher             = "200"
-    interval            = 30
+    interval            = 10
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2
@@ -169,6 +176,7 @@ resource "aws_autoscaling_group" "this" {
   desired_capacity = 2
   min_size         = 1
   max_size         = 2
+  health_check_type   = "ELB"
   vpc_zone_identifier = [
     data.aws_subnet.private_a.id,
     data.aws_subnet.private_b.id
