@@ -172,11 +172,11 @@ resource "aws_lb_listener" "http" {
 # Auto Scaling Group
 
 resource "aws_autoscaling_group" "this" {
-  name             = var.asg_name
-  desired_capacity = 2
-  min_size         = 1
-  max_size         = 2
-  health_check_type   = "ELB"
+  name              = var.asg_name
+  desired_capacity  = 2
+  min_size          = 1
+  max_size          = 2
+  health_check_type = "ELB"
   vpc_zone_identifier = [
     data.aws_subnet.private_a.id,
     data.aws_subnet.private_b.id
